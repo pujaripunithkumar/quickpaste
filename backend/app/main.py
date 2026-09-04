@@ -152,14 +152,20 @@ def get_paste(paste_id: str):
     with engine.connect() as connection:
 
         result = connection.execute(
-            select(Paste).where(
+            select(
+                Paste.id,
+                Paste.content,
+                Paste.language,
+                Paste.expires_at,
+                Paste.created_at
+            ).where(
                 Paste.id == paste_id
             )
         )
 
-        paste = result.scalar_one_or_none()
+        row = result.mappings().first()
 
-    if paste is None:
+    if row is None:
         raise HTTPException(
             status_code=404,
             detail="Paste not found"
@@ -167,20 +173,23 @@ def get_paste(paste_id: str):
 
     # Check expiration
 
-    if paste.expires_at is not None:
+    if row["expires_at"] is not None:
 
-        now = datetime.now(timezone.utc).replace(
-            tzinfo=None
-        )
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        if now >= paste.expires_at:
+        if now >= row["expires_at"]:
             raise HTTPException(
                 status_code=410,
                 detail="Paste has expired"
             )
 
-    return paste_response(paste)
-
+    return {
+        "id": str(row["id"]),
+        "content": row["content"],
+        "language": row["language"],
+        "expires_at": row["expires_at"],
+        "created_at": row["created_at"]
+    }
 
 # -------------------------
 # Delete paste

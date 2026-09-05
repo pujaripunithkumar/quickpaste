@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://quickpasteapp.vercel.app/sitemap.xml

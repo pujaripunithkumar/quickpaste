@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import secrets
+import string
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +35,7 @@ app.add_middleware(
 # -------------------------
 
 class PasteCreate(BaseModel):
+
     content: str = Field(
         ...,
         min_length=1,
@@ -51,17 +54,20 @@ class PasteCreate(BaseModel):
 
 
 # -------------------------
-# Response helper
+# Short ID generator
 # -------------------------
 
-def paste_response(paste: Paste):
-    return {
-        "id": str(paste.id),
-        "content": paste.content,
-        "language": paste.language,
-        "expires_at": paste.expires_at,
-        "created_at": paste.created_at
-    }
+def generate_short_id():
+
+    characters = (
+        string.ascii_uppercase
+        + string.digits
+    )
+
+    return "".join(
+        secrets.choice(characters)
+        for _ in range(6)
+    )
 
 
 # -------------------------
@@ -70,6 +76,7 @@ def paste_response(paste: Paste):
 
 @app.get("/")
 def root():
+
     return {
         "message": "QuickPaste API is running"
     }
@@ -83,6 +90,7 @@ def root():
 def db_test():
 
     with engine.connect():
+
         return {
             "message": "Database connected successfully"
         }
@@ -100,26 +108,50 @@ def create_paste(paste: PasteCreate):
     if paste.expires_in is not None:
 
         if paste.expires_in <= 0:
+
             raise HTTPException(
                 status_code=400,
                 detail="expires_in must be greater than 0"
             )
 
-        expires_at = datetime.now(timezone.utc).replace(
-            tzinfo=None
+        expires_at = (
+            datetime.now(timezone.utc)
+            .replace(tzinfo=None)
+            + timedelta(
+                seconds=paste.expires_in
+            )
         )
 
-        from datetime import timedelta
 
-        expires_at = expires_at + timedelta(
-            seconds=paste.expires_in
-        )
+    # Generate unique short ID
+
+    while True:
+
+        short_id = generate_short_id()
+
+        with engine.connect() as connection:
+
+            existing = connection.execute(
+                select(Paste.id).where(
+                    Paste.short_id == short_id
+                )
+            ).first()
+
+        if existing is None:
+            break
+
+
+    # Create paste
 
     new_paste = Paste(
+        short_id=short_id,
         content=paste.content,
         language=paste.language,
         expires_at=expires_at
     )
+
+
+    # Save paste
 
     with engine.begin() as connection:
 
@@ -127,18 +159,22 @@ def create_paste(paste: PasteCreate):
             Paste.__table__
             .insert()
             .values(
+                short_id=new_paste.short_id,
                 content=new_paste.content,
                 language=new_paste.language,
                 expires_at=new_paste.expires_at
             )
-            .returning(Paste.__table__.c.id)
+            .returning(
+                Paste.__table__.c.short_id
+            )
         )
 
-        paste_id = result.scalar_one()
+        short_id = result.scalar_one()
+
 
     return {
         "message": "Paste created successfully",
-        "id": str(paste_id)
+        "id": short_id
     }
 
 
@@ -153,43 +189,52 @@ def get_paste(paste_id: str):
 
         result = connection.execute(
             select(
-                Paste.id,
+                Paste.short_id,
                 Paste.content,
                 Paste.language,
                 Paste.expires_at,
                 Paste.created_at
             ).where(
-                Paste.id == paste_id
+                Paste.short_id == paste_id
             )
         )
 
         row = result.mappings().first()
 
+
     if row is None:
+
         raise HTTPException(
             status_code=404,
             detail="Paste not found"
         )
 
+
     # Check expiration
 
     if row["expires_at"] is not None:
 
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = (
+            datetime.now(timezone.utc)
+            .replace(tzinfo=None)
+        )
 
         if now >= row["expires_at"]:
+
             raise HTTPException(
                 status_code=410,
                 detail="Paste has expired"
             )
 
+
     return {
-        "id": str(row["id"]),
+        "id": row["short_id"],
         "content": row["content"],
         "language": row["language"],
         "expires_at": row["expires_at"],
         "created_at": row["created_at"]
     }
+
 
 # -------------------------
 # Delete paste
@@ -203,19 +248,26 @@ def delete_paste(paste_id: str):
         result = connection.execute(
             Paste.__table__
             .delete()
-            .where(Paste.id == paste_id)
-            .returning(Paste.__table__.c.id)
+            .where(
+                Paste.short_id == paste_id
+            )
+            .returning(
+                Paste.__table__.c.short_id
+            )
         )
 
         deleted_id = result.scalar_one_or_none()
 
+
     if deleted_id is None:
+
         raise HTTPException(
             status_code=404,
             detail="Paste not found"
         )
 
+
     return {
         "message": "Paste deleted successfully",
-        "id": str(deleted_id)
+        "id": deleted_id
     }
